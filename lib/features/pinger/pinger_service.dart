@@ -185,12 +185,10 @@ class PingerNotifier extends StateNotifier<PingState> {
 
   void start() {
     _timer?.cancel();
-    final interval = _ref.read(intervalProvider);
     final shouldReset = _ref.read(resetOnStartProvider);
     final base = shouldReset ? const PingState() : state;
     state = base.copyWith(status: PingStatus.pinging, isActive: true);
     _invokeService('start', {'text': 'Pinging ${_ref.read(targetUrlProvider)}'});
-    _timer = Timer.periodic(interval, (_) => _runPing());
     _runPing();
   }
 
@@ -223,6 +221,17 @@ class PingerNotifier extends StateNotifier<PingState> {
     }
   }
 
+  void _scheduleNextPing() {
+    if (!mounted || !state.isActive) return;
+    final interval = _ref.read(intervalProvider);
+    _timer = Timer(interval, () => _runPing());
+  }
+
+  void resetCounts() {
+    if (state.isActive) return; // only allow when stopped
+    state = const PingState();
+  }
+
   Future<void> _runPing() async {
     if (!mounted || !state.isActive || state.isInFlight) return;
 
@@ -243,6 +252,7 @@ class PingerNotifier extends StateNotifier<PingState> {
         clearLatency: true,
       );
       _updateNotification();
+      _scheduleNextPing();
       return;
     }
 
@@ -273,6 +283,7 @@ class PingerNotifier extends StateNotifier<PingState> {
       );
       _updateNotification();
     }
+    _scheduleNextPing();
   }
 
   @override
