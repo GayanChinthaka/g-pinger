@@ -3,15 +3,28 @@ name: Build Release APK
 on:
   workflow_dispatch:
     inputs:
+      tag_name:
+        description: 'Release Tag (e.g. v1.0.0). Leave blank to auto-generate from pubspec.yaml'
+        required: false
+        type: string
+        default: ''
+      release_title:
+        description: 'Release Title (optional)'
+        required: false
+        type: string
+        default: ''
       build_split_abi:
         description: 'Build split APKs per ABI (arm64-v8a, armeabi-v7a, x86_64)'
         required: false
         type: boolean
         default: false
 
+permissions:
+  contents: write
+
 jobs:
   build:
-    name: Build Release APK
+    name: Build & Release APK
     runs-on: ubuntu-latest
 
     steps:
@@ -34,6 +47,21 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Extract App Version & Tag
+        id: release_info
+        run: |
+          VERSION=$(grep '^version: ' pubspec.yaml | sed 's/version: //' | tr -d '\r\n')
+          TAG="${{ inputs.tag_name }}"
+          if [ -z "$TAG" ]; then
+            TAG="v${VERSION}-${{ github.run_number }}"
+          fi
+          TITLE="${{ inputs.release_title }}"
+          if [ -z "$TITLE" ]; then
+            TITLE="Release ${TAG}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+
       - name: Build APK (Universal)
         if: ${{ !inputs.build_split_abi }}
         run: flutter build apk --release
@@ -42,9 +70,22 @@ jobs:
         if: ${{ inputs.build_split_abi }}
         run: flutter build apk --release --split-per-abi
 
-      - name: Upload Release APK
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
           path: build/app/outputs/flutter-apk/*.apk
           retention-days: 14
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_info.outputs.tag }}
+          name: ${{ steps.release_info.outputs.title }}
+          files: build/app/outputs/flutter-apk/*.apk
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
