@@ -84,6 +84,13 @@ class PingerScreen extends ConsumerWidget {
               duration: const Duration(milliseconds: 400),
               child: _StatsCard(state: pingState),
             ),
+            // Clear counts button – shown when stopped and there are counts
+            if (!pingState.isActive &&
+                (pingState.successCount > 0 || pingState.failCount > 0))
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: _ClearCountsButton(),
+              ),
             const SizedBox(height: 24),
             const _SettingsSection(),
             const SizedBox(height: 16),
@@ -261,6 +268,26 @@ class _NeonRingPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _NeonRingPainter oldDelegate) =>
       oldDelegate.progress != progress || oldDelegate.color != color;
+}
+
+// ── Clear counts button ──────────────────────────────────────────────────────
+
+class _ClearCountsButton extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return TextButton.icon(
+      onPressed: () {
+        if (ref.read(hapticFeedbackProvider)) Vibration.vibrate(duration: 30);
+        ref.read(pingerProvider.notifier).resetCounts();
+      },
+      icon: const Icon(Icons.refresh, size: 18),
+      label: const Text('Clear Counts'),
+      style: TextButton.styleFrom(
+        foregroundColor: Theme.of(context).colorScheme.outline,
+        textStyle: const TextStyle(fontSize: 13),
+      ),
+    );
+  }
 }
 
 // ── Stats card ───────────────────────────────────────────────────────────────
