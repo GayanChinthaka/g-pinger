@@ -21,4 +21,14 @@ void main() {
 
     expect(find.text('G Pinger'), findsOneWidget);
   });
+
+  test('kDefaultUrls contains expected default URLs', () {
+    expect(kDefaultUrls, containsAll([
+      'http://192.168.8.1/',
+      'https://hutch.lk/',
+      'https://wplsp.hutch.lk.prod.hosts.ooklaserver.net:8080',
+      'https://oneapp.hutch.lk/',
+      'http://google.com/',
+    ]));
+  });
 }
