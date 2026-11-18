@@ -33,8 +33,16 @@ class PingerForegroundService : Service() {
         @Volatile
         private var isRunning = false
 
+        // An update that arrives after Dart asked to start but before
+        // onStartCommand ran; shown as soon as the service comes up.
+        @Volatile
+        private var pendingText: String? = null
+
         fun updateNotification(context: Context, text: String) {
-            if (!isRunning) return
+            if (!isRunning) {
+                pendingText = text
+                return
+            }
             val manager =
                 context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.notify(NOTIFICATION_ID, buildNotification(context, text))
@@ -91,8 +99,9 @@ class PingerForegroundService : Service() {
             }
             else -> {
                 createChannel(this)
-                val notification =
-                    buildNotification(this, intent?.getStringExtra(EXTRA_TEXT) ?: "Pinging…")
+                val text = pendingText ?: intent?.getStringExtra(EXTRA_TEXT) ?: "Pinging…"
+                pendingText = null
+                val notification = buildNotification(this, text)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     startForeground(
                         NOTIFICATION_ID,
@@ -110,6 +119,7 @@ class PingerForegroundService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        pendingText = null
         super.onDestroy()
     }
 }

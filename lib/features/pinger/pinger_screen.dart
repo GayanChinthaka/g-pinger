@@ -111,9 +111,13 @@ class _PingButton extends ConsumerStatefulWidget {
 }
 
 class _PingButtonState extends ConsumerState<_PingButton>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   bool _isPressed = false;
+  // Countdown to the next ping: sweeps 0 → 1 over one interval.
   late final AnimationController _ringController;
+  // Spins a short arc while a ping is in flight, so the ring never sits
+  // frozen at full while waiting on a slow or timing-out request.
+  late final AnimationController _spinController;
 
   static const _neonColor = Color(0xFF00E5FF);
 
@@ -121,11 +125,16 @@ class _PingButtonState extends ConsumerState<_PingButton>
   void initState() {
     super.initState();
     _ringController = AnimationController(vsync: this);
+    _spinController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
   }
 
   @override
   void dispose() {
     _ringController.dispose();
+    _spinController.dispose();
     super.dispose();
   }
 
@@ -134,22 +143,36 @@ class _PingButtonState extends ConsumerState<_PingButton>
     _ringController.forward(from: 0);
   }
 
+  // Setting value (rather than calling stop) also notifies listeners, so the
+  // painter drops the spinner on the next frame.
+  void _stopSpin() => _spinController.value = 0;
+
   @override
   Widget build(BuildContext context) {
     final isActive = ref.watch(pingerProvider.select((s) => s.isActive));
     final interval = ref.watch(intervalProvider);
 
-    // Reset the neon ring every time a new ping fires, and stop it once
-    // pinging is turned off, so it always represents time-to-next-ping.
+    // The ring spins while a ping is in flight, then sweeps once over the
+    // interval after each result, so a full ring means "next ping now".
+    // The timer for the next ping is also scheduled when a result lands.
     ref.listen<PingState>(pingerProvider, (previous, next) {
       if (!next.isActive) {
-        _ringController.stop();
+        _stopSpin();
         _ringController.value = 0;
         return;
       }
-      final justStarted = !(previous?.isActive ?? false);
-      final pingJustFired = next.lastPingTime != previous?.lastPingTime;
-      if (justStarted || pingJustFired) _restartRing(interval);
+      if (next.isInFlight) {
+        if (!_spinController.isAnimating) {
+          _ringController.value = 0;
+          _spinController.repeat();
+        }
+        return;
+      }
+      final pingCompleted = next.lastPingTime != previous?.lastPingTime;
+      if (pingCompleted) {
+        _stopSpin();
+        _restartRing(interval);
+      }
     });
 
     return GestureDetector(
@@ -167,11 +190,14 @@ class _PingButtonState extends ConsumerState<_PingButton>
           alignment: Alignment.center,
           children: [
             AnimatedBuilder(
-              animation: _ringController,
+              animation: Listenable.merge([_ringController, _spinController]),
               builder: (context, _) => CustomPaint(
                 size: const Size(216, 216),
                 painter: _NeonRingPainter(
                   progress: _ringController.value,
+                  spin: _spinController.isAnimating
+                      ? _spinController.value
+                      : null,
                   color: _neonColor,
                 ),
               ),
@@ -231,23 +257,32 @@ class _PingButtonState extends ConsumerState<_PingButton>
 }
 
 // A glowing neon arc that sweeps a full circle once per ping interval,
-// tracing progress toward the next ping while pinging is active.
+// tracing progress toward the next ping while pinging is active. While a
+// ping is in flight ([spin] is non-null) it draws a short rotating arc instead.
 class _NeonRingPainter extends CustomPainter {
   final double progress;
+  final double? spin;
   final Color color;
 
-  const _NeonRingPainter({required this.progress, required this.color});
+  const _NeonRingPainter({
+    required this.progress,
+    required this.spin,
+    required this.color,
+  });
+
+  static const _spinArcFraction = 0.25;
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (progress <= 0) return;
+    final spin = this.spin;
+    if (spin == null && progress <= 0) return;
 
     final rect = Rect.fromCircle(
       center: size.center(Offset.zero),
       radius: size.width / 2 - 4,
     );
-    const startAngle = -math.pi / 2;
-    final sweepAngle = 2 * math.pi * progress;
+    final startAngle = -math.pi / 2 + (spin ?? 0) * 2 * math.pi;
+    final sweepAngle = 2 * math.pi * (spin != null ? _spinArcFraction : progress);
 
     final glowPaint = Paint()
       ..color = color.withValues(alpha: 0.55)
@@ -267,7 +302,9 @@ class _NeonRingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _NeonRingPainter oldDelegate) =>
-      oldDelegate.progress != progress || oldDelegate.color != color;
+      oldDelegate.progress != progress ||
+      oldDelegate.spin != spin ||
+      oldDelegate.color != color;
 }
 
 // ── Clear counts button ──────────────────────────────────────────────────────
@@ -457,7 +494,8 @@ class _SettingsSectionState extends ConsumerState<_SettingsSection> {
             ? interval
             : const Duration(seconds: 10);
 
-    final allUrls = [...kDefaultUrls, ...customUrls];
+    // A set keeps the dropdown free of duplicate values, which it asserts on.
+    final allUrls = {...kDefaultUrls, ...customUrls}.toList();
     if (!allUrls.contains(targetUrl)) allUrls.insert(0, targetUrl);
 
     return Card(

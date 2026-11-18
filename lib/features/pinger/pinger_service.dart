@@ -95,11 +95,17 @@ final customUrlsProvider =
 class CustomUrlsNotifier extends StateNotifier<List<String>> {
   final SharedPreferences _prefs;
 
+  // Drop any saved entry that duplicates a default URL (older versions
+  // allowed adding them, which put the same value twice in the dropdown).
   CustomUrlsNotifier(this._prefs)
-      : super(_prefs.getStringList(_kCustomUrlsKey) ?? const []);
+      : super(
+          (_prefs.getStringList(_kCustomUrlsKey) ?? const [])
+              .where((u) => !kDefaultUrls.contains(u))
+              .toList(),
+        );
 
   Future<void> add(String url) async {
-    if (state.contains(url)) return;
+    if (kDefaultUrls.contains(url) || state.contains(url)) return;
     state = [...state, url];
     await _prefs.setStringList(_kCustomUrlsKey, state);
   }
@@ -163,6 +169,22 @@ final allIntervalsProvider = Provider<List<Duration>>((ref) {
   return all;
 });
 
+// ── App info ────────────────────────────────────────────────────────────────
+
+// The installed version name, which Flutter takes from pubspec.yaml's
+// `version:`, so the About screen never drifts from the build.
+// Null when not running on Android (e.g. tests).
+final appVersionProvider = FutureProvider<String?>((ref) async {
+  try {
+    return await PingerNotifier._serviceChannel
+        .invokeMethod<String>('getAppVersion');
+  } on MissingPluginException {
+    return null;
+  } on PlatformException {
+    return null;
+  }
+});
+
 // ── Pinger ──────────────────────────────────────────────────────────────────
 
 final pingerProvider =
@@ -171,6 +193,12 @@ final pingerProvider =
 class PingerNotifier extends StateNotifier<PingState> {
   final Ref _ref;
   Timer? _timer;
+  http.Client? _client;
+
+  // Bumped on every start/stop. A ping that was in flight when the session
+  // changed must not record its result or schedule another ping, otherwise
+  // a quick stop → start leaves two ping loops running.
+  int _session = 0;
 
   // Native foreground service: keeps the process alive while the app is in
   // the background and shows the ongoing notification with a Stop action.
@@ -186,7 +214,8 @@ class PingerNotifier extends StateNotifier<PingState> {
   void toggle() => state.isActive ? stop() : start();
 
   void start() {
-    _timer?.cancel();
+    _session++;
+    _cancelPending();
     final shouldReset = _ref.read(resetOnStartProvider);
     final base = shouldReset ? const PingState() : state;
     state = base.copyWith(status: PingStatus.pinging, isActive: true);
@@ -195,14 +224,22 @@ class PingerNotifier extends StateNotifier<PingState> {
   }
 
   void stop({bool notifyService = true}) {
-    _timer?.cancel();
-    _timer = null;
+    _session++;
+    _cancelPending();
     state = state.copyWith(
       status: PingStatus.idle,
       isActive: false,
       isInFlight: false,
     );
     if (notifyService) _invokeService('stop');
+  }
+
+  // Cancels the next scheduled ping and aborts the request in flight, if any.
+  void _cancelPending() {
+    _timer?.cancel();
+    _timer = null;
+    _client?.close();
+    _client = null;
   }
 
   void _updateNotification() {
@@ -226,6 +263,7 @@ class PingerNotifier extends StateNotifier<PingState> {
   void _scheduleNextPing() {
     if (!mounted || !state.isActive) return;
     final interval = _ref.read(intervalProvider);
+    _timer?.cancel();
     _timer = Timer(interval, () => _runPing());
   }
 
@@ -236,6 +274,7 @@ class PingerNotifier extends StateNotifier<PingState> {
 
   Future<void> _runPing() async {
     if (!mounted || !state.isActive || state.isInFlight) return;
+    final session = _session;
 
     final urlString = _ref.read(targetUrlProvider);
     final Uri uri;
@@ -261,10 +300,13 @@ class PingerNotifier extends StateNotifier<PingState> {
     state = state.copyWith(isInFlight: true);
     final startTime = DateTime.now();
     final timeout = _ref.read(pingTimeoutProvider);
+    // A client per ping, so a timeout or stop() can close it and actually
+    // abort the request instead of leaving it running in the background.
+    final client = _client = http.Client();
 
     try {
-      await http.head(uri).timeout(timeout);
-      if (!mounted || !state.isActive) return;
+      await client.head(uri).timeout(timeout);
+      if (!mounted || session != _session) return;
       final latency = DateTime.now().difference(startTime).inMilliseconds;
       state = state.copyWith(
         status: PingStatus.success,
@@ -275,7 +317,7 @@ class PingerNotifier extends StateNotifier<PingState> {
       );
       _updateNotification();
     } catch (_) {
-      if (!mounted || !state.isActive) return;
+      if (!mounted || session != _session) return;
       state = state.copyWith(
         status: PingStatus.failed,
         lastPingTime: DateTime.now(),
@@ -284,13 +326,16 @@ class PingerNotifier extends StateNotifier<PingState> {
         clearLatency: true,
       );
       _updateNotification();
+    } finally {
+      client.close();
+      if (identical(_client, client)) _client = null;
     }
     _scheduleNextPing();
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _cancelPending();
     _invokeService('stop');
     _serviceChannel.setMethodCallHandler(null);
     super.dispose();

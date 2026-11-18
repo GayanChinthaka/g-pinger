@@ -4,6 +4,8 @@ import 'package:vibration/vibration.dart';
 
 import '../pinger/pinger_service.dart';
 
+const _kInUseText = 'In use — stop pinging to remove';
+
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
@@ -19,6 +21,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final pingTimeout = ref.watch(pingTimeoutProvider);
     final haptic = ref.watch(hapticFeedbackProvider);
     final resetOnStart = ref.watch(resetOnStartProvider);
+    // The URL and interval a running session uses can't be removed until
+    // pinging stops — matches the lock on the main screen's pickers.
+    final isActive = ref.watch(pingerProvider.select((s) => s.isActive));
+    final targetUrl = ref.watch(targetUrlProvider);
+    final interval = ref.watch(intervalProvider);
     final prefs = ref.read(sharedPreferencesProvider);
     final theme = Theme.of(context);
 
@@ -37,28 +44,34 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
           // Custom URLs (deletable)
-          ...customUrls.map(
-            (url) => Dismissible(
+          ...customUrls.map((url) {
+            final inUse = isActive && url == targetUrl;
+            return Dismissible(
               key: ValueKey('url-$url'),
-              direction: DismissDirection.endToStart,
+              direction:
+                  inUse ? DismissDirection.none : DismissDirection.endToStart,
               background: _DismissBackground(),
               confirmDismiss: (_) => _confirmDelete(context, '"$url"'),
               onDismissed: (_) => _deleteUrl(url),
               child: ListTile(
                 leading: const Icon(Icons.link, size: 20),
                 title: Text(url, style: theme.textTheme.bodyMedium),
+                subtitle: inUse ? const Text(_kInUseText) : null,
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline, size: 20),
-                  onPressed: () async {
-                    if (await _confirmDelete(context, '"$url"') ?? false) {
-                      _deleteUrl(url);
-                    }
-                  },
+                  onPressed: inUse
+                      ? null
+                      : () async {
+                          if (await _confirmDelete(context, '"$url"') ??
+                              false) {
+                            _deleteUrl(url);
+                          }
+                        },
                 ),
                 dense: true,
               ),
-            ),
-          ),
+            );
+          }),
           ListTile(
             leading: const Icon(Icons.add_circle_outline),
             title: const Text('Add custom URL'),
@@ -75,10 +88,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               dense: true,
             ),
           ),
-          ...customIntervals.map(
-            (d) => Dismissible(
+          ...customIntervals.map((d) {
+            final inUse = isActive && d.inSeconds == interval.inSeconds;
+            return Dismissible(
               key: ValueKey('interval-${d.inSeconds}'),
-              direction: DismissDirection.endToStart,
+              direction:
+                  inUse ? DismissDirection.none : DismissDirection.endToStart,
               background: _DismissBackground(),
               confirmDismiss: (_) =>
                   _confirmDelete(context, '"${formatInterval(d)}"'),
@@ -87,20 +102,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 leading: const Icon(Icons.timer, size: 20),
                 title:
                     Text(formatInterval(d), style: theme.textTheme.bodyMedium),
+                subtitle: inUse ? const Text(_kInUseText) : null,
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline, size: 20),
-                  onPressed: () async {
-                    if (await _confirmDelete(
-                            context, '"${formatInterval(d)}"') ??
-                        false) {
-                      _deleteInterval(d);
-                    }
-                  },
+                  onPressed: inUse
+                      ? null
+                      : () async {
+                          if (await _confirmDelete(
+                                  context, '"${formatInterval(d)}"') ??
+                              false) {
+                            _deleteInterval(d);
+                          }
+                        },
                 ),
                 dense: true,
               ),
-            ),
-          ),
+            );
+          }),
           ListTile(
             leading: const Icon(Icons.add_circle_outline),
             title: const Text('Add custom interval'),
@@ -203,6 +221,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   return 'Must start with http:// or https://';
                 }
                 if (uri.host.isEmpty) return 'Invalid URL';
+                if (kDefaultUrls.contains(s) ||
+                    ref.read(customUrlsProvider).contains(s)) {
+                  return 'This URL is already in the list';
+                }
               } catch (_) {
                 return 'Invalid URL format';
               }

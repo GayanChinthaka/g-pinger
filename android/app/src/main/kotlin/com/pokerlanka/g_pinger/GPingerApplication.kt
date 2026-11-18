@@ -59,6 +59,12 @@ class GPingerApplication : Application() {
                     stopService(Intent(this, PingerForegroundService::class.java))
                     result.success(null)
                 }
+                // versionName comes from pubspec.yaml's `version:` at build time.
+                "getAppVersion" -> {
+                    @Suppress("DEPRECATION")
+                    val info = packageManager.getPackageInfo(packageName, 0)
+                    result.success(info.versionName)
+                }
                 else -> result.notImplemented()
             }
         }

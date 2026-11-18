@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../donate/donate_screen.dart';
+import '../pinger/pinger_service.dart';
 
-class AboutScreen extends StatelessWidget {
+class AboutScreen extends ConsumerWidget {
   const AboutScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final version = ref.watch(appVersionProvider).valueOrNull;
 
     return Scaffold(
       appBar: AppBar(title: const Text('About Us')),
@@ -46,7 +49,8 @@ class AboutScreen extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'Version 1.0.0',
+              // Empty until loaded, so the layout below doesn't jump.
+              version == null ? '' : 'Version $version',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.outline,
               ),
